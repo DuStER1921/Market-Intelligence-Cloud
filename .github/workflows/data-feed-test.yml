@@ -19,7 +19,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Configure cloud Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Install probe dependencies
@@ -38,7 +38,7 @@ jobs:
           python -m scripts.feed_acceptance | tee acceptance-report.json
       - name: Upload quality report only
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: daily-feed-acceptance
           path: acceptance-report.json
