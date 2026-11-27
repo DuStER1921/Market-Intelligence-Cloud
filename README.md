@@ -175,3 +175,49 @@ rotation. Preserve the original common cutoff and 900-second freshness limit.
 Report attempts, 429 responses, retries and wait duration. Shared public
 provider quotas remain outside our control. No paid service or new secrets.
 Seven new offline tests cover pacing and bounded retry behavior; not yet run.
+
+## Private cloud storage — manual acceptance only
+
+Feed gates: DEX #4 passed 18/18 checks, 279 daily observations, 144 five-minute
+bars, 6 paced GeckoTerminal calls and 0 rate limits. Stock/crypto both passed
+on 2026-11-27 (12/12 SIP current-session instruments with 24 bars, 27/27
+Binance instruments with 8,100 bars; 70 offline tests on both):
+- https://github.com/DuStER1921/Market-Intelligence-Cloud/actions/runs/46011330095/job/140547299509
+- https://github.com/DuStER1921/Market-Intelligence-Cloud/actions/runs/46021104360
+
+Use a dedicated Google Cloud project, enable Drive API, and authorize only
+`https://www.googleapis.com/auth/drive.file` with a dedicated OAuth web client.
+Personal My Drive storage uses user OAuth, not a service account. Never use
+full Drive scope. OAuth Playground (own credentials) is a browser-only bootstrap:
+https://developers.google.com/oauthplayground/
+Register its exact HTTPS redirect URI in the client temporarily. An external
+Testing app can issue refresh tokens that expire after seven days; for sustained
+operation configure the consent screen appropriately and re-authorize after
+publishing. Do not bypass Google warnings or enable billing/paid services without
+owner approval. Remove Playground redirect URI after obtaining the refresh token
+if no longer needed. Keep refresh token and client secret in GitHub Actions
+secrets only, never in chat, issues, logs, artifacts or repository files.
+
+Set Actions secret `DRIVE_OAUTH_JSON` to a JSON object with exactly
+`client_id`, `client_secret`, `refresh_token`. The client refreshes access
+tokens at runtime and rejects missing/unverified or broader scope.
+
+Run **PRIVATE DRIVE STORAGE ACCEPTANCE → bootstrap** on main. The app creates
+(or reuses) its own private folder named Market Intelligence Storage v1.
+This is intentional: drive.file cannot automatically access an arbitrary existing
+folder by ID. Move this new folder into the previously designated private
+Market-Intelligence-Cloud folder using Drive UI. Set Actions secrets
+`DRIVE_PROJECT_FOLDER_ID` (existing project folder ID) and
+`DRIVE_STORAGE_FOLDER_ID` (new app-created folder ID from its URL).
+Then run the same workflow with **acceptance**. The script checks exact parent,
+owner-only permissions, schema marker, creates a small synthetic JSON canary
+if absent, reads it back byte-for-byte, verifies SHA-256 metadata, and repeats
+the lookup/write operation without duplicate creation. Never overwrite or
+delete existing files. Drive-generated file IDs are reused for bounded retries
+within a request. Unknown results or duplicate matches fail closed. This
+single-writer synthetic test is not a proof of cross-job exactly-once ingestion.
+Only sanitized status is published, no Drive IDs, OAuth secrets or market data.
+14 added offline tests (84 total; 70 previously passed).
+No scheduled workflow, production collector, provider redistribution approval,
+partition/backfill implementation, real market data storage or private dashboard
+publication is enabled yet.
