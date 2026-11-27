@@ -1,0 +1,43 @@
+name: DATA FEED ACCEPTANCE
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: data-feed-acceptance
+  cancel-in-progress: false
+
+jobs:
+  daily-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout isolated research repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Configure cloud Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install probe dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Syntax and offline validation
+        run: |
+          python -m compileall -q scripts tests
+          python -m unittest discover -s tests -v
+      - name: Daily provider acceptance
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/feed_acceptance.py | tee acceptance-report.json
+      - name: Upload quality report only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-feed-acceptance
+          path: acceptance-report.json
+          if-no-files-found: ignore
+          retention-days: 7
