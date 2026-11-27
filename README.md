@@ -95,3 +95,49 @@ Production gates remain: sustained intraday reliability and backfill, private
 output destination and data usage rights, integration on real data, research
 validation with chronological holdouts and costs, then scheduling. Keep crypto
 automation and local SOL projects untouched.
+
+## Phase 3 — DEX and on-chain feed qualification (manual)
+
+Run **Actions → DEX ONCHAIN FEED ACCEPTANCE → Run workflow → main** at any
+time, independently of the stock/crypto cloud acceptance. No new credentials,
+packages, paid subscriptions, local runners or schedules. The original stock
+and crypto workflows remain unchanged.
+
+Pilot networks: Solana, Ethereum, Base. Public provider contracts:
+- DeFiLlama free endpoints: https://api-docs.defillama.com/llms-free.txt
+- GeckoTerminal public API: https://api.geckoterminal.com/docs/index.html
+- DEX Screener: https://docs.dexscreener.com/api/reference
+
+The probe requests 31 consecutive UTC daily observations for each network
+(stablecoin nominal USD-peg circulating amount, TVL USD, DEX volume USD).
+The required last date is UTC today minus two days, allowing daily publication
+lag; the most recent closed date is reported separately. Today's incomplete
+daily observation is excluded. The USD-peg supply proxy is not marked-to-market
+value, a bridge flow, or a measured net capital inflow.
+
+For each network, choose the pool with greatest reported reserve among eligible
+first-page GeckoTerminal pools (at least USD 100,000 reported reserve).
+This is a dynamic API qualification sample, not a fixed research universe,
+not a market-wide ranking and not a token recommendation. Request 48 exact
+closed 5-minute USD/base OHLCV bars (four hours), with a two-minute cutoff
+buffer. Require complete UTC grid, valid geometry, finite positive prices and
+nonnegative volume. Strict missing-bar failure can reflect inactivity or provider
+coverage. Verify the same chain/pool/token addresses and numeric fields on
+DEX Screener, allowing explicit reversed base/quote orientation. This is identity
+and schema verification only: unsynchronized rolling-volume windows are not
+equivalent to closed candles; no price agreement or freshness claim is made
+for DEX Screener snapshots without source timestamp.
+
+The probe makes at most 18 HTTP requests total (6 GeckoTerminal, 3 DEX Screener,
+9 DeFiLlama); no redirects or retry loops. Failed/blocked provider access is
+recorded without response content. No raw values are published. The report
+contains only counts, sample pool addresses, timestamps and quality metadata.
+15 new synthetic tests, 56 total (41 previously passed). A single PASS would
+qualify only this limited snapshot. Bridge net flows, wallets, fixed pool
+registry, continuous ingestion, storage rights, private storage, dashboard
+integration and predictive research remain NOT_RUN. No automated collection.
+
+Crypto cloud acceptance #1 already passed 27/27 spot pairs, 8,100 closed bars,
+41/41 tests and no Node 20 warning:
+https://github.com/DuStER1921/Market-Intelligence-Cloud/actions/runs/46000981773/job/140512251269
+Stock current-session qualification remains pending.
