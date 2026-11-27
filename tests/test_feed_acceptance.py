@@ -59,7 +59,7 @@ class FeedQualityTests(unittest.TestCase):
     def test_missing_secondary_blocks_comparison(self):
         result=f.compare_sources("SPY",{"SPY":self.df["Adj Close"]},{})
         self.assertEqual(result["status"],"BLOCKED")
-        self.assertEqual(result["missing_sources"],["stooq"])
+        self.assertEqual(result["missing_sources"],["alpaca_sip"])
     def test_identical_returns_pass(self):
         a=pd.Series(np.linspace(100,200,len(self.expected)),index=self.expected)
         result=f.compare_sources("SPY",{"SPY":a},{"SPY":a*2})
