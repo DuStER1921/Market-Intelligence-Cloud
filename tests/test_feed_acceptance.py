@@ -2,6 +2,7 @@
 import unittest
 import pandas as pd
 import numpy as np
+import requests
 from scripts import feed_acceptance as f
 
 class FeedQualityTests(unittest.TestCase):
@@ -48,6 +49,27 @@ class FeedQualityTests(unittest.TestCase):
             f.quality(self.df.drop(columns="Adj Close"),"Adj Close")
     def test_exception_sanitization(self):
         self.assertNotIn("SECRET",str(f.failure(RuntimeError("SECRET"))))
+
+    def test_http_status_without_secret(self):
+        response=requests.Response()
+        response.status_code=403
+        result=f.failure(requests.HTTPError("SECRET",response=response))
+        self.assertEqual(result["http_status"],403)
+        self.assertNotIn("SECRET",str(result))
+    def test_missing_secondary_blocks_comparison(self):
+        result=f.compare_sources("SPY",{"SPY":self.df["Adj Close"]},{})
+        self.assertEqual(result["status"],"BLOCKED")
+        self.assertEqual(result["missing_sources"],["stooq"])
+    def test_identical_returns_pass(self):
+        a=pd.Series(np.linspace(100,200,len(self.expected)),index=self.expected)
+        result=f.compare_sources("SPY",{"SPY":a},{"SPY":a*2})
+        self.assertEqual(result["status"],"PASS")
+        self.assertEqual(result["paired_daily_returns"],len(a)-1)
+    def test_no_bridging_missing_session(self):
+        a=pd.Series(np.linspace(100,200,len(self.expected)),index=self.expected)
+        b=a.drop(a.index[10])
+        result=f.compare_sources("SPY",{"SPY":a},{"SPY":b})
+        self.assertEqual(result["paired_daily_returns"],len(a)-3)
 
 if __name__=="__main__":
     unittest.main()
