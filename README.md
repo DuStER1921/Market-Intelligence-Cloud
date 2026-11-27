@@ -128,11 +128,12 @@ and schema verification only: unsynchronized rolling-volume windows are not
 equivalent to closed candles; no price agreement or freshness claim is made
 for DEX Screener snapshots without source timestamp.
 
-The probe makes at most 18 HTTP requests total (6 GeckoTerminal, 3 DEX Screener,
-9 DeFiLlama); no redirects or retry loops. Failed/blocked provider access is
+The probe makes 18 initial HTTP requests (6 GeckoTerminal, 3 DEX Screener,
+9 DeFiLlama), plus at most two bounded GeckoTerminal retries for HTTP 429.
+GeckoTerminal attempts are paced by at least 20 seconds between starts. No redirects. Failed/blocked provider access is
 recorded without response content. No raw values are published. The report
 contains only counts, sample pool addresses, timestamps and quality metadata.
-22 Phase 3 synthetic tests, 63 total (41 previously passed before Phase 3). A single PASS would
+29 Phase 3 synthetic tests, 70 total (41 previously passed before Phase 3). A single PASS would
 qualify only this limited snapshot. Bridge net flows, wallets, fixed pool
 registry, continuous ingestion, storage rights, private storage, dashboard
 integration and predictive research remain NOT_RUN. No automated collection.
@@ -156,3 +157,21 @@ liquidity minimum and all previous strict acceptance gates remain unchanged.
 The bytes32 issue is a plausible cause, not proven from the first log.
 Reports now expose only allowlisted validation reasons, not response bodies.
 A fresh manual run must verify the repair; no production approval.
+
+### Phase 3 run #3: rate limit handling (2026-11-27)
+
+Run #3: 17/18 checks passed. All nine 31-day daily series passed;
+Solana and Ethereum OHLCV and all three DEX Screener checks passed.
+Base GeckoTerminal OHLCV returned HTTP 429. The initial stablecoin host
+and Ethereum pool selection problems did not recur. The public GeckoTerminal
+API documentation describes an approximate, variable rate of 10 calls/min:
+https://api.geckoterminal.com/docs/index.html
+We now pace GeckoTerminal attempts at least 20 seconds apart, honor Retry-After
+(delta seconds or HTTP-date) with a conservative minimum 60-second cooldown,
+and allow at most one retry per request and two retries total per run. If
+Retry-After exceeds 90 seconds, the retry budget is exhausted, or a retry
+returns 429, stop GeckoTerminal calls and fail closed; no other host or IP
+rotation. Preserve the original common cutoff and 900-second freshness limit.
+Report attempts, 429 responses, retries and wait duration. Shared public
+provider quotas remain outside our control. No paid service or new secrets.
+Seven new offline tests cover pacing and bounded retry behavior; not yet run.
