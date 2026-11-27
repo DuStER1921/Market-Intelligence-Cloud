@@ -15,13 +15,13 @@ GitHub-hosted Ubuntu, Python 3.11, read-only repository permissions, manual trig
 12-minute timeout, one concurrent job. No scheduled jobs are enabled.
 
 The probe requests daily history since 2019-01-01 from Yahoo Finance (27 ETFs),
-Stooq (SPY and 11 sector ETFs), and FRED (4 macro series). It validates exchange
+Alpaca SIP (SPY and 11 sector ETFs, all corporate-action adjustments), and FRED (4 macro series). It validates exchange
 sessions, prices, volume, duplicates, missing bars, freshness, common-session alignment,
 and cross-source adjusted-return differences. Individual coverage >=99.5%,
 core common-session coverage >=99%; cross-source median absolute return difference
 <=10 bps and 95th percentile <=50 bps are provisional engineering checks, not trading edge.
 Only the quality report is published in logs/artifacts; no raw historical dataset is exported.
-The report explicitly separates intraday, Drive and dashboard gates as NOT_RUN.
+The report includes a historical 5-minute SIP/IEX probe for the last completed regular session, separately from daily acceptance. Live freshness, sustained intraday availability, Drive and dashboard integration are not approved.
 
 The tests are synthetic and run before any network requests.
 A successful daily probe does not approve an intraday feed or live trading.
@@ -35,16 +35,21 @@ Review provider terms and usage rights before storing or redistributing market d
 4. Only then enable five-minute scheduled collection; GitHub schedules are best effort.
 5. Evaluate regression, ACF, PCA, lead-lag and regime/volatility models on aligned history.
 
-### Stooq authentication and acceptance diagnostics
+### Alpaca access and independent verification
 
-Stooq CSV access now may require an API key (see https://github.com/pydata/pandas-datareader/issues/1012).
-Obtain it via the provider's browser page https://stooq.com/q/d/?s=spy.us&get_apikey
-and add it only as the repository Actions secret `STOOQ_API_KEY`. Do not put it
-in source, issue text, command output or chat. The manual workflow passes it only
-to the probe step. Without the secret, Stooq and dependent comparisons are BLOCKED;
-the strict verdict stays NO_GO. HTTP status is logged without URL or response body.
-Primary research readiness is reported separately and is not independent verification.
-FRED reports first/last observation and history-start availability; BAMLH0A0HYM2 is
-limited to three years by the provider since April 2026, and macro availability PASS
-does not certify full history or point-in-time release alignment.
-See https://fred.stlouisfed.org/series/BAMLH0A0HYM2.
+Stooq is retired from this acceptance workflow because access could not be established.
+Set repository Actions secrets ALPACA_API_KEY and ALPACA_SECRET_KEY using the Paper
+Trading account. Do not send or store keys in code, logs, issues, artifacts or chat.
+The workflow uses only GET https://data.alpaca.markets/v2/stocks/bars, never trading endpoints.
+Explicit SIP daily history from 2019 with adjustment=all is required for the independent
+crosscheck; IEX is never substituted silently. Pagination is bounded and validated.
+SIP and IEX 5-minute raw OHLCV are probed separately on SPY and all 11 sectors for
+the previous completed regular session (XNYS calendar including early closes).
+The expected grid requires every bar; IEX gaps can reflect venue-specific inactivity,
+not necessarily a transport error. A historical probe does not measure live latency.
+A 401/403/429 is recorded without URL, response body or credentials. If the account
+cannot access SIP, independent verification remains NO_GO; do not buy a subscription
+automatically. All 22 offline tests execute before credentials are passed into the probe.
+FRED availability does not certify full history or point-in-time release alignment;
+BAMLH0A0HYM2 history is provider-limited (https://fred.stlouisfed.org/series/BAMLH0A0HYM2).
+No raw market data is exported. No schedule is enabled.
