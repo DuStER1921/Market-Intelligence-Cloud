@@ -30,11 +30,12 @@ jobs:
           python -m unittest discover -s tests -v
       - name: Daily provider acceptance
         env:
-          STOOQ_API_KEY: ${{ secrets.STOOQ_API_KEY }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         shell: bash
         run: |
           set -o pipefail
-          python scripts/feed_acceptance.py | tee acceptance-report.json
+          python -m scripts.feed_acceptance | tee acceptance-report.json
       - name: Upload quality report only
         if: always()
         uses: actions/upload-artifact@v4
