@@ -1,6 +1,7 @@
 """Read-only, daily-feed acceptance probe. No raw data exported."""
 import io
 import json
+import logging
 import sys
 from datetime import datetime, timedelta
 from importlib.metadata import version
@@ -17,7 +18,7 @@ SYMBOLS = ["SPY", *SECTORS, *"QQQ DIA IWM RSP KBE KRE SMH SOXX HYG LQD TLT IEF S
 START = "2019-01-01"
 # Exclude current New York date even when the probe runs after close.
 END = datetime.now(ZoneInfo("America/New_York")).date()
-CAL = xcals.get_calendar("XNYS", start=START, end=str(END))
+CAL = xcals.get_calendar("XNYS", start="2018-12-01", end=str(END+timedelta(days=14)))
 EXPECTED = pd.DatetimeIndex(CAL.sessions_in_range(START, str(END-timedelta(days=1)))).tz_localize(None)
 REPORT = {"asof_utc": datetime.now(ZoneInfo("UTC")).isoformat(), "start": START,
           "last_expected_session": str(EXPECTED[-1].date()), "expected_sessions": len(EXPECTED),
@@ -38,7 +39,7 @@ def quality(df, price):
         raise ValueError("duplicate sessions")
     if not df.index.isin(EXPECTED).all():
         raise ValueError("unexpected session dates")
-    fields = ["Open", "High", "Low", "Close", "Volume", price]
+    fields = list(dict.fromkeys(["Open", "High", "Low", "Close", "Volume", price]))
     if not all(c in df for c in fields):
         raise ValueError("missing OHLCV or adjusted price")
     clean = df[fields].apply(pd.to_numeric, errors="coerce")
@@ -52,7 +53,7 @@ def quality(df, price):
     missing = EXPECTED.difference(df.index)
     coverage = len(df)/len(EXPECTED)
     latest = df.index[-1] == EXPECTED[-1]
-    return {"status": "PASS" if coverage >= .98 and latest else "FAIL",
+    return {"status": "PASS" if coverage >= .995 and latest else "FAIL",
             "rows": len(df), "coverage": round(coverage,6), "missing_sessions": len(missing),
             "first": str(df.index[0].date()), "last": str(df.index[-1].date()),
             "fresh": bool(latest)}, df[price].astype(float)
@@ -66,6 +67,7 @@ def failure(exc):
               "insufficient overlap","empty FRED data","stale FRED data") else "provider or validation error"}
 
 def main():
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
     yahoo, stooq = {}, {}
     # Batch requests, no auto-adjust: explicitly use adjusted closes for research.
     for offset in range(0, len(SYMBOLS), 6):
@@ -133,11 +135,17 @@ def main():
     secondary=all(REPORT["stooq"][s]["status"]=="PASS" for s in core)
     compare=all(REPORT["comparison"][s]["status"]=="PASS" for s in core)
     macro=all(x["status"]=="PASS" for x in REPORT["fred"].values())
+    common = EXPECTED.copy()
+    for s in core:
+        common = common.intersection(yahoo[s].index) if s in yahoo else common[:0]
+    aligned = len(common)/len(EXPECTED)
+    REPORT["alignment"] = {"common_sessions":len(common), "coverage":round(aligned,6),
+                           "status":"PASS" if aligned>=.99 else "FAIL"}
     REPORT["gates"]={"core_primary":primary,"core_secondary":secondary,
                      "crosscheck":compare,"macro":macro,
                      "extended_primary":all(x["status"]=="PASS" for x in REPORT["yahoo"].values()),
                      "intraday":"NOT_RUN","drive_write":"NOT_RUN","dashboard_integration":"NOT_RUN"}
-    REPORT["verdict"]="GO_FOR_DAILY_RESEARCH_REVIEW" if primary and secondary and compare and macro else "NO_GO"
+    REPORT["verdict"]="GO_FOR_DAILY_RESEARCH_REVIEW" if primary and secondary and compare and macro and aligned>=.99 else "NO_GO"
     print(json.dumps(REPORT,indent=2,allow_nan=False))
     # Public logs contain only data quality metrics, not raw OHLCV or private data.
     return 0 if REPORT["verdict"].startswith("GO") else 1
