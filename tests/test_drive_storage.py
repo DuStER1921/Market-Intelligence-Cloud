@@ -37,7 +37,15 @@ class DriveTests(unittest.TestCase):
         self.session.post.return_value=Mock(status_code=200)
         self.session.post.return_value.json.return_value={"access_token":"abc","token_type":"Bearer","scope":"https://www.googleapis.com/auth/drive"}
         with patch.dict(os.environ,{"DRIVE_OAUTH_JSON":json.dumps(cfg),"GITHUB_ACTIONS":"false"}):
-            with self.assertRaisesRegex(d.StorageError,"UNEXPECTED_OAUTH_SCOPE"): d.oauth(self.session)
+            with self.assertRaisesRegex(d.StorageError,"UNEXPECTED_OR_UNVERIFIED_OAUTH_SCOPE"): d.oauth(self.session)
+    def test_oauth_scope_must_be_verified(self):
+        cfg={"client_id":"id","client_secret":"secret","refresh_token":"refresh"}
+        self.session.post.return_value=Mock(status_code=200)
+        with patch.dict(os.environ,{"DRIVE_OAUTH_JSON":json.dumps(cfg),"GITHUB_ACTIONS":"false"}):
+            self.session.post.return_value.json.return_value={"access_token":"abc","token_type":"Bearer"}
+            with self.assertRaisesRegex(d.StorageError,"UNVERIFIED_OAUTH_SCOPE"): d.oauth(self.session)
+            self.session.post.return_value.json.return_value={"access_token":"abc","token_type":"Bearer","scope":d.SCOPE}
+            self.assertEqual(d.oauth(self.session),"abc")
     def test_privacy_rejects_shared_folder(self):
         with patch.object(self.drive,"meta",return_value=root(shared=True)):
             with self.assertRaisesRegex(d.StorageError,"NOT_PRIVATE_OWNED"): self.drive.private(ROOT)
