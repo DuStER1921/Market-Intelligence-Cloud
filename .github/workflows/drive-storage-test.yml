@@ -1,0 +1,55 @@
+name: PRIVATE DRIVE STORAGE ACCEPTANCE
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Bootstrap app-owned folder or verify private storage
+        type: choice
+        required: true
+        options:
+          - bootstrap
+          - acceptance
+        default: bootstrap
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mic-private-storage
+  cancel-in-progress: false
+
+jobs:
+  storage-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install existing dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Offline safety tests
+        run: |
+          python -m compileall -q scripts tests
+          python -m unittest discover -s tests -v
+      - name: Private storage probe
+        env:
+          DRIVE_OAUTH_JSON: ${{ secrets.DRIVE_OAUTH_JSON }}
+          DRIVE_PROJECT_FOLDER_ID: ${{ secrets.DRIVE_PROJECT_FOLDER_ID }}
+          DRIVE_STORAGE_FOLDER_ID: ${{ secrets.DRIVE_STORAGE_FOLDER_ID }}
+          PROBE_MODE: ${{ inputs.mode }}
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m scripts.drive_storage_probe "$PROBE_MODE" | tee storage-quality.json
+      - name: Upload sanitized quality report only
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: private-storage-quality
+          path: storage-quality.json
+          if-no-files-found: ignore
+          retention-days: 7
