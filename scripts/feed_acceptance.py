@@ -2,6 +2,7 @@
 import io
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timedelta
 from importlib.metadata import version
@@ -60,11 +61,29 @@ def quality(df, price):
 
 def failure(exc):
     # Do not print provider response bodies, headers or credentials in public logs.
-    return {"status":"FAIL","error_type": type(exc).__name__,
+    result = {"status":"FAIL","error_type": type(exc).__name__,
             "reason": str(exc) if isinstance(exc,ValueError) and str(exc) in (
               "empty or missing required price","duplicate sessions","unexpected session dates",
               "missing OHLCV or adjusted price","nonfinite OHLCV","invalid price or volume","invalid OHLC geometry",
-              "insufficient overlap","empty FRED data","stale FRED data") else "provider or validation error"}
+              "insufficient overlap","empty FRED data","stale FRED data","unexpected CSV format") else "provider or validation error"}
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        result["http_status"] = exc.response.status_code
+    return result
+
+def compare_sources(ticker, yahoo, stooq):
+    missing = [name for name, source in (("yahoo", yahoo), ("stooq", stooq)) if ticker not in source]
+    if missing:
+        return {"status":"BLOCKED","reason":"source data unavailable","missing_sources":missing}
+    aligned = pd.concat([yahoo[ticker], stooq[ticker]],axis=1).reindex(EXPECTED)
+    returns = np.log(aligned).diff().dropna()
+    if len(returns) < 250:
+        raise ValueError("insufficient overlap")
+    diff = (returns.iloc[:,0]-returns.iloc[:,1]).abs()*10000
+    median,p95 = float(diff.median()),float(diff.quantile(.95))
+    return {"status":"PASS" if median<=10 and p95<=50 else "FAIL",
+        "paired_daily_returns":len(diff),"median_abs_difference_bps":round(median,3),
+        "p95_abs_difference_bps":round(p95,3),
+        "note":"adjustment conventions may differ; not proof of true total returns"}
 
 def main():
     logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -86,30 +105,26 @@ def main():
         except Exception as exc:
             for ticker in batch:
                 REPORT["yahoo"][ticker] = failure(exc)
-    # Independent secondary source on benchmark and all sectors, bounded requests.
+    # Independent secondary source; authenticated CSV access, no key logging.
+    stooq_key = os.environ.get("STOOQ_API_KEY", "").strip()
     for ticker in ["SPY", *SECTORS]:
+        if not stooq_key:
+            REPORT["stooq"][ticker] = {"status":"BLOCKED","reason":"STOOQ_API_KEY not configured"}
+            continue
         try:
             response = requests.get("https://stooq.com/q/d/l/", params={
-                "s": ticker.lower()+".us", "i":"d", "d1":START.replace("-",""),
+                "s": ticker.lower()+".us", "i":"d", "apikey":stooq_key, "d1":START.replace("-",""),
                 "d2":str(END-timedelta(days=1)).replace("-","")}, timeout=15)
             response.raise_for_status()
+            if not response.text.lstrip("\ufeff").startswith("Date,"):
+                raise ValueError("unexpected CSV format")
             df = pd.read_csv(io.StringIO(response.text), index_col="Date", parse_dates=True)
             REPORT["stooq"][ticker], stooq[ticker] = quality(df,"Close")
         except Exception as exc:
             REPORT["stooq"][ticker] = failure(exc)
     for ticker in ["SPY", *SECTORS]:
         try:
-            # Reindex to exchange calendar before returns: no bridging missing days.
-            aligned = pd.concat([yahoo[ticker], stooq[ticker]],axis=1).reindex(EXPECTED)
-            returns = np.log(aligned).diff().dropna()
-            if len(returns) < 250:
-                raise ValueError("insufficient overlap")
-            diff = (returns.iloc[:,0]-returns.iloc[:,1]).abs()*10000
-            median,p95 = float(diff.median()),float(diff.quantile(.95))
-            REPORT["comparison"][ticker] = {"status":"PASS" if median<=10 and p95<=50 else "FAIL",
-                "paired_daily_returns":len(diff),"median_abs_difference_bps":round(median,3),
-                "p95_abs_difference_bps":round(p95,3),
-                "note":"adjustment conventions may differ; not proof of true total returns"}
+            REPORT["comparison"][ticker] = compare_sources(ticker, yahoo, stooq)
         except Exception as exc:
             REPORT["comparison"][ticker] = failure(exc)
     for series in ("VIXCLS","DGS10","DGS2","BAMLH0A0HYM2"):
@@ -123,10 +138,12 @@ def main():
             valid=dates[dates.notna() & np.isfinite(vals)]
             if len(valid)<250 or valid.duplicated().any():
                 raise ValueError("empty FRED data")
+            first=valid.min().date()
             last=valid.max().date()
             age=(END-last).days
             REPORT["fred"][series]={"status":"PASS" if 0<=age<=10 else "FAIL",
-                "observations":len(valid),"last":str(last),"age_calendar_days":age,
+                "observations":len(valid),"first":str(first),"last":str(last),"age_calendar_days":age,
+                "requested_history_start":START,"history_start_available":str(first)<=str(pd.Timestamp(START)+pd.Timedelta(days=7))[:10],
                 "note":"latest vintage, publication lag not validated"}
         except Exception as exc:
             REPORT["fred"][series]=failure(exc)
@@ -145,6 +162,8 @@ def main():
                      "crosscheck":compare,"macro":macro,
                      "extended_primary":all(x["status"]=="PASS" for x in REPORT["yahoo"].values()),
                      "intraday":"NOT_RUN","drive_write":"NOT_RUN","dashboard_integration":"NOT_RUN"}
+    REPORT["primary_research_status"] = "READY_FOR_EXPLORATORY_RESEARCH_REVIEW" if primary and aligned>=.99 else "NO_GO"
+    REPORT["independent_verification_status"] = "PASS" if secondary and compare else "NOT_VERIFIED"
     REPORT["verdict"]="GO_FOR_DAILY_RESEARCH_REVIEW" if primary and secondary and compare and macro and aligned>=.99 else "NO_GO"
     print(json.dumps(REPORT,indent=2,allow_nan=False))
     # Public logs contain only data quality metrics, not raw OHLCV or private data.
