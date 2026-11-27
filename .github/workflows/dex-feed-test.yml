@@ -1,0 +1,41 @@
+name: DEX ONCHAIN FEED ACCEPTANCE
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dex-feed-acceptance
+  cancel-in-progress: false
+
+jobs:
+  dex-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install existing dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Offline safety tests
+        run: |
+          python -m compileall -q scripts tests
+          python -m unittest discover -s tests -v
+      - name: DEX and on-chain public data qualification
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m scripts.dex_feed_probe | tee dex-feed-quality.json
+      - name: Upload quality report only
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: dex-feed-quality
+          path: dex-feed-quality.json
+          if-no-files-found: ignore
+          retention-days: 7
