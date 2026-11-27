@@ -80,6 +80,31 @@ class DexTests(unittest.TestCase):
         data=pair()
         data["pairs"][0]["baseToken"],data["pairs"][0]["quoteToken"]=data["pairs"][0]["quoteToken"],data["pairs"][0]["baseToken"]
         self.assertFalse(p.pair_quality(data,"eth","ethereum",POOL,BASE,QUOTE)["same_orientation"])
+    def test_stablecoin_host(self):
+        self.assertEqual(p.LLAMA_STABLE,"https://stablecoins.llama.fi")
+        self.assertNotEqual(p.LLAMA_STABLE,p.LLAMA)
+    def test_evm_bytes32_pool_selected(self):
+        identifier="0x"+"AB"*32
+        self.assertEqual(p.choose_pool({"data":[pool_data(identifier)]},"eth"),
+                         (identifier.lower(),BASE,QUOTE))
+    def test_evm_bytes32_pair_identity(self):
+        identifier="0x"+"a"*64
+        data=pair()
+        data["pairs"][0]["pairAddress"]=identifier.upper().replace("0X","0x")
+        self.assertTrue(p.pair_quality(data,"eth","ethereum",identifier,BASE,QUOTE)["same_pool"])
+    def test_evm_bytes32_not_token_address(self):
+        with self.assertRaisesRegex(ValueError,"invalid chain address"):
+            p.token_id("eth_0x"+"a"*64,"eth")
+    def test_malformed_pool_still_rejected(self):
+        with self.assertRaisesRegex(ValueError,"invalid chain address"):
+            p.choose_pool({"data":[pool_data("0x"+"a"*63)]},"eth")
+    def test_bytes32_pool_duplicate_rejected(self):
+        identifier="0x"+"a"*64
+        with self.assertRaisesRegex(ValueError,"duplicate pool address"):
+            p.choose_pool({"data":[pool_data(identifier),pool_data(identifier)]},"eth")
+    def test_safe_validation_diagnostics(self):
+        self.assertEqual(p.failure(ValueError("invalid chain address"))["reason"],"invalid chain address")
+        self.assertNotIn("reason",p.failure(ValueError("UNTRUSTED_PAYLOAD")))
     def test_http_refusal_no_redirect(self):
         s=Mock()
         s.get.return_value=Mock(status_code=429)
