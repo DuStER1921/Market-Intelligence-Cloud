@@ -132,7 +132,7 @@ The probe makes at most 18 HTTP requests total (6 GeckoTerminal, 3 DEX Screener,
 9 DeFiLlama); no redirects or retry loops. Failed/blocked provider access is
 recorded without response content. No raw values are published. The report
 contains only counts, sample pool addresses, timestamps and quality metadata.
-15 new synthetic tests, 56 total (41 previously passed). A single PASS would
+22 Phase 3 synthetic tests, 63 total (41 previously passed before Phase 3). A single PASS would
 qualify only this limited snapshot. Bridge net flows, wallets, fixed pool
 registry, continuous ingestion, storage rights, private storage, dashboard
 integration and predictive research remain NOT_RUN. No automated collection.
@@ -141,3 +141,18 @@ Crypto cloud acceptance #1 already passed 27/27 spot pairs, 8,100 closed bars,
 41/41 tests and no Node 20 warning:
 https://github.com/DuStER1921/Market-Intelligence-Cloud/actions/runs/46000981773/job/140512251269
 Stock current-session qualification remains pending.
+
+### Phase 3 first-run repair (2026-11-27)
+
+First online probe: 12 PASS, 4 FAIL, 2 BLOCKED. TVL and DEX volume passed
+on all three networks; Solana and Base pool identity and 48-bar grids passed.
+Stablecoin requests returned HTTP 404 on all networks, so the stablecoin
+host is now https://stablecoins.llama.fi (TVL and volume hosts unchanged).
+Ethereum pool selection returned ValueError without a detailed reason. EVM
+pool IDs can be 20-byte addresses or 32-byte identifiers (singleton AMMs
+such as Uniswap v4). Pool and token validation are now separate; token
+addresses remain 20-byte EVM addresses. Exact pool and token matching,
+liquidity minimum and all previous strict acceptance gates remain unchanged.
+The bytes32 issue is a plausible cause, not proven from the first log.
+Reports now expose only allowlisted validation reasons, not response bodies.
+A fresh manual run must verify the repair; no production approval.
