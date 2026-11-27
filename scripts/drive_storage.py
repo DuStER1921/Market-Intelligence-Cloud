@@ -45,8 +45,8 @@ def oauth(session):
     require(r.status_code==200,"OAUTH_REFRESH_FAILED")
     b=r.json()
     require(isinstance(b,dict) and isinstance(b.get("access_token"),str) and b["access_token"],"INVALID_TOKEN_RESPONSE")
-    if "scope" in b:
-        require(set(b["scope"].split())=={SCOPE},"UNEXPECTED_OAUTH_SCOPE")
+    require(isinstance(b.get("scope"),str) and set(b["scope"].split())=={SCOPE},
+            "UNEXPECTED_OR_UNVERIFIED_OAUTH_SCOPE")
     require(str(b.get("token_type","")).lower()=="bearer","INVALID_TOKEN_TYPE")
     # Mask newly issued tokens before any other operation in GitHub Actions.
     if os.environ.get("GITHUB_ACTIONS")=="true":
