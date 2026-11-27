@@ -13,13 +13,13 @@ FILE="fileABC12345"
 def root(**kwargs):
     return {"id":ROOT,"name":d.FOLDER,"mimeType":d.MIME_FOLDER,
             "parents":[PARENT],"trashed":False,"shared":False,"ownedByMe":True,
-            "appProperties":d.MARKER,**kwargs}
+            "appProperties":d.MARKER} | kwargs
 
 def canary(**kwargs):
     return {"id":FILE,"name":d.CANARY_NAME,"mimeType":"application/json",
             "parents":[ROOT],"trashed":False,"shared":False,"ownedByMe":True,
             "appProperties":{"mic_schema":"storage-v1","sha256":d.digest(d.CANARY)},
-            "size":str(len(d.CANARY)),**kwargs}
+            "size":str(len(d.CANARY))} | kwargs
 
 class DriveTests(unittest.TestCase):
     def setUp(self):
