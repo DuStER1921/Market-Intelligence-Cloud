@@ -1,0 +1,65 @@
+name: CLOUD FEED ACCEPTANCE
+on:
+  workflow_dispatch:
+    inputs:
+      market:
+        description: Market to qualify (stocks during regular US session)
+        required: true
+        type: choice
+        options:
+          - crypto
+          - stock
+          - both
+        default: both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-feed-acceptance
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        market: ${{ fromJSON(inputs.market == 'both' && '["stock","crypto"]' || format('["{0}"]', inputs.market)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Offline safety tests
+        run: |
+          python -m compileall -q scripts tests
+          python -m unittest discover -s tests -v
+      - name: Stock SIP delayed current-session probe
+        if: matrix.market == 'stock'
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m scripts.cloud_feed_probe stock | tee cloud-feed-quality.json
+      - name: Binance public spot probe (no credentials)
+        if: matrix.market == 'crypto'
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m scripts.cloud_feed_probe crypto | tee cloud-feed-quality.json
+      - name: Upload quality report only
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cloud-feed-quality-${{ matrix.market }}
+          path: cloud-feed-quality.json
+          retention-days: 7
+          if-no-files-found: ignore
