@@ -34,3 +34,17 @@ Review provider terms and usage rights before storing or redistributing market d
 3. Validate private cloud storage and dashboard integration.
 4. Only then enable five-minute scheduled collection; GitHub schedules are best effort.
 5. Evaluate regression, ACF, PCA, lead-lag and regime/volatility models on aligned history.
+
+### Stooq authentication and acceptance diagnostics
+
+Stooq CSV access now may require an API key (see https://github.com/pydata/pandas-datareader/issues/1012).
+Obtain it via the provider's browser page https://stooq.com/q/d/?s=spy.us&get_apikey
+and add it only as the repository Actions secret `STOOQ_API_KEY`. Do not put it
+in source, issue text, command output or chat. The manual workflow passes it only
+to the probe step. Without the secret, Stooq and dependent comparisons are BLOCKED;
+the strict verdict stays NO_GO. HTTP status is logged without URL or response body.
+Primary research readiness is reported separately and is not independent verification.
+FRED reports first/last observation and history-start availability; BAMLH0A0HYM2 is
+limited to three years by the provider since April 2026, and macro availability PASS
+does not certify full history or point-in-time release alignment.
+See https://fred.stlouisfed.org/series/BAMLH0A0HYM2.
