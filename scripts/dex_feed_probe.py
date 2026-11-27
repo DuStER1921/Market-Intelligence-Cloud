@@ -8,6 +8,7 @@ import requests
 
 NETWORKS = {"Solana":("solana","solana"),"Ethereum":("eth","ethereum"),"Base":("base","base")}
 LLAMA="https://api.llama.fi"
+LLAMA_STABLE="https://stablecoins.llama.fi"
 GECKO="https://api.geckoterminal.com/api/v2"
 DEX="https://api.dexscreener.com"
 DAY=86400
@@ -44,6 +45,13 @@ def address(v,network):
     if not isinstance(v,str) or not re.fullmatch(pattern,v):
         raise ValueError("invalid chain address")
     return v if network=="solana" else v.lower()
+
+def pool_id(v,network):
+    # EVM singleton AMMs (e.g. Uniswap v4) identify pools by bytes32 IDs.
+    # Keep token address validation strictly 20 bytes, independently.
+    if network!="solana" and isinstance(v,str) and re.fullmatch(r"0x[0-9a-fA-F]{64}",v):
+        return v.lower()
+    return address(v,network)
 
 def token_id(value,network):
     prefix=network+"_"
@@ -94,7 +102,7 @@ def choose_pool(body,network):
         reserve=num(a["reserve_in_usd"])
         if reserve<MIN_RESERVE:
             continue
-        pool=address(a["address"],network)
+        pool=pool_id(a["address"],network)
         if pool in seen:
             raise ValueError("duplicate pool address")
         seen.add(pool)
@@ -135,7 +143,7 @@ def pair_quality(body,network,dex_chain,pool,base,quote):
     if not isinstance(body["pairs"],list):
         raise ValueError("invalid pair list")
     found=[p for p in body["pairs"] if p.get("chainId")==dex_chain
-           and address(p["pairAddress"],network)==pool]
+           and pool_id(p["pairAddress"],network)==pool]
     if len(found)!=1:
         raise ValueError("missing or ambiguous matching pair")
     p=found[0]
@@ -164,6 +172,17 @@ def get(session,url,params=None):
 
 def failure(exc):
     report={"status":"FAIL","error_type":type(exc).__name__}
+    # Only expose fixed validation messages, never untrusted provider payloads.
+    if isinstance(exc,ValueError) and str(exc) in (
+        "invalid numeric type","invalid numeric domain","invalid timestamp",
+        "invalid transaction count","invalid chain address","wrong token network",
+        "invalid pool list","duplicate pool address","identical pool tokens",
+        "no eligible liquid pool","empty daily history","invalid daily volume schema",
+        "duplicate or non-UTC daily timestamp","invalid OHLCV list",
+        "invalid OHLCV schema","unexpected, duplicate or open bar",
+        "invalid OHLC geometry","invalid pair list","missing or ambiguous matching pair",
+        "token identity mismatch"):
+        report["reason"]=str(exc)
     if isinstance(exc,requests.HTTPError) and exc.response is not None:
         report["http_status"]=exc.response.status_code
     return report
@@ -187,7 +206,7 @@ def probe():
             r={}
             report["chains"][chain]=r
             r["stablecoin_nominal_usd_peg"]=guarded(lambda:daily_quality(
-                get(s,LLAMA+"/stablecoincharts/"+chain),"stablecoin",now))
+                get(s,LLAMA_STABLE+"/stablecoincharts/"+chain),"stablecoin",now))
             r["tvl_usd"]=guarded(lambda:daily_quality(
                 get(s,LLAMA+"/v2/historicalChainTvl/"+chain),"tvl",now))
             r["dex_volume_usd"]=guarded(lambda:daily_quality(get(s,LLAMA+"/overview/dexs/"+chain.lower(),
@@ -196,7 +215,8 @@ def probe():
             try:
                 pool,base,quote=choose_pool(get(s,GECKO+"/networks/"+network+"/pools",{"page":1}),network)
                 r["pool_selection"]={"status":"PASS","pool_address":pool,
-                    "method":"highest reported reserve among eligible first-page pools"}
+                    "method":"highest reported reserve among eligible first-page pools",
+                    "pool_identifier_type":"evm_bytes32" if network!="solana" and len(pool)==66 else "address"}
             except Exception as exc:
                 r["pool_selection"]=failure(exc)
                 r["ohlcv"]={"status":"BLOCKED"}
