@@ -4,6 +4,7 @@ import math
 import re
 import time
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import requests
 
 NETWORKS = {"Solana":("solana","solana"),"Ethereum":("eth","ethereum"),"Base":("base","base")}
@@ -170,6 +171,69 @@ def get(session,url,params=None):
         raise requests.HTTPError("provider refusal or error",response=response)
     return response.json()
 
+# Conservative per-run pacing; shared runner/IP traffic remains outside our control.
+GECKO_INTERVAL=20
+GECKO_RETRY_LIMIT=2
+GECKO_MAX_WAIT=90
+
+def retry_delay(value, now):
+    if value is None:
+        return 60
+    try:
+        if re.fullmatch(r"[0-9]{1,10}",value):
+            return max(60,int(value))
+        dt=parsedate_to_datetime(value)
+        if dt.tzinfo is None:
+            return 60
+        return max(60,math.ceil(dt.timestamp()-now))
+    except (TypeError,ValueError,OverflowError):
+        return 60
+
+class GeckoClient:
+    """Single paced client per probe; no alternate host or unbounded retries."""
+    def __init__(self,session):
+        self.session=session
+        self.next_allowed=0.0
+        self.attempts=0
+        self.rate_limits=0
+        self.retries=0
+        self.wait_seconds=0.0
+        self.stopped=False
+
+    def wait(self,seconds):
+        if seconds>0:
+            time.sleep(seconds)
+            self.wait_seconds+=seconds
+
+    def get(self,url,params=None):
+        if self.stopped:
+            raise ValueError("GeckoTerminal paused after rate limit")
+        if not url.startswith(GECKO+"/"):
+            raise ValueError("invalid GeckoTerminal endpoint")
+        for attempt in range(2):
+            self.wait(max(0,self.next_allowed-time.monotonic()))
+            self.next_allowed=time.monotonic()+GECKO_INTERVAL
+            self.attempts+=1
+            try:
+                return get(self.session,url,params)
+            except requests.HTTPError as exc:
+                if exc.response is None or exc.response.status_code!=429:
+                    raise
+                self.rate_limits+=1
+                delay=retry_delay(exc.response.headers.get("Retry-After"),time.time())
+                if attempt or self.retries>=GECKO_RETRY_LIMIT or delay>GECKO_MAX_WAIT:
+                    self.stopped=True
+                    raise
+                self.retries+=1
+                self.next_allowed=max(self.next_allowed,time.monotonic()+delay)
+        raise RuntimeError("unreachable GeckoTerminal retry state")
+
+    def diagnostics(self):
+        return {"attempts":self.attempts,"rate_limit_responses":self.rate_limits,
+                "retries":self.retries,"wait_seconds":round(self.wait_seconds,3),
+                "minimum_request_interval_seconds":GECKO_INTERVAL,
+                "stopped_after_rate_limit":self.stopped}
+
 def failure(exc):
     report={"status":"FAIL","error_type":type(exc).__name__}
     # Only expose fixed validation messages, never untrusted provider payloads.
@@ -181,7 +245,7 @@ def failure(exc):
         "duplicate or non-UTC daily timestamp","invalid OHLCV list",
         "invalid OHLCV schema","unexpected, duplicate or open bar",
         "invalid OHLC geometry","invalid pair list","missing or ambiguous matching pair",
-        "token identity mismatch"):
+        "token identity mismatch","GeckoTerminal paused after rate limit","invalid GeckoTerminal endpoint"):
         report["reason"]=str(exc)
     if isinstance(exc,requests.HTTPError) and exc.response is not None:
         report["http_status"]=exc.response.status_code
@@ -197,11 +261,12 @@ def probe():
     now=int(time.time())
     cutoff=(now-120)//STEP*STEP
     report={"schema":"dex-feed-acceptance-v1","asof_utc":iso(now),
-            "scope":"one dynamic pool sample per network, daily history qualification only",
+            "scope":"one dynamic pool sample per network, daily and closed 5-minute history qualification only",
             "chains":{},"gates":{"bridge_flows":"NOT_RUN","wallet_activity":"NOT_RUN",
             "persistent_storage":"NOT_RUN","dashboard_integration":"NOT_RUN",
             "live_soak":"NOT_RUN","edge_research":"NOT_RUN"}}
     with requests.Session() as s:
+        gecko=GeckoClient(s)
         for chain,(network,dex_chain) in NETWORKS.items():
             r={}
             report["chains"][chain]=r
@@ -213,7 +278,7 @@ def probe():
                 {"excludeTotalDataChart":"false","excludeTotalDataChartBreakdown":"true"})["totalDataChart"],
                 "dex_volume",now))
             try:
-                pool,base,quote=choose_pool(get(s,GECKO+"/networks/"+network+"/pools",{"page":1}),network)
+                pool,base,quote=choose_pool(gecko.get(GECKO+"/networks/"+network+"/pools",{"page":1}),network)
                 r["pool_selection"]={"status":"PASS","pool_address":pool,
                     "method":"highest reported reserve among eligible first-page pools",
                     "pool_identifier_type":"evm_bytes32" if network!="solana" and len(pool)==66 else "address"}
@@ -222,11 +287,12 @@ def probe():
                 r["ohlcv"]={"status":"BLOCKED"}
                 r["dexscreener"]={"status":"BLOCKED"}
                 continue
-            r["ohlcv"]=guarded(lambda:ohlcv_quality(get(s,
+            r["ohlcv"]=guarded(lambda:ohlcv_quality(gecko.get(
                 GECKO+"/networks/"+network+"/pools/"+pool+"/ohlcv/minute",
                 {"aggregate":5,"limit":BARS,"before_timestamp":cutoff-1,"currency":"usd","token":"base"}),cutoff))
             r["dexscreener"]=guarded(lambda:pair_quality(get(s,DEX+"/latest/dex/pairs/"+dex_chain+"/"+pool),
                 network,dex_chain,pool,base,quote))
+    report["geckoterminal_request_health"]=gecko.diagnostics()
     finished=int(time.time())
     report["finished_utc"]=iso(finished)
     report["ohlcv_cutoff_age_seconds"]=finished-cutoff
