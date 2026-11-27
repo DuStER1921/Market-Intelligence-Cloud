@@ -1,6 +1,6 @@
 """Offline tests for Phase 3 data contract."""
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from scripts import dex_feed_probe as p
 
 NOW=1775000000
@@ -105,6 +105,91 @@ class DexTests(unittest.TestCase):
     def test_safe_validation_diagnostics(self):
         self.assertEqual(p.failure(ValueError("invalid chain address"))["reason"],"invalid chain address")
         self.assertNotIn("reason",p.failure(ValueError("UNTRUSTED_PAYLOAD")))
+    def test_retry_delay_seconds_and_http_date(self):
+        self.assertEqual(p.retry_delay("75",0),75)
+        self.assertEqual(p.retry_delay("1",0),60)
+        self.assertEqual(p.retry_delay("Thu, 01 Jan 1970 00:01:20 GMT",0),80)
+        self.assertEqual(p.retry_delay("invalid",0),60)
+        self.assertEqual(p.retry_delay(None,0),60)
+
+    def gecko_fake(self,statuses,retry_after=None):
+        s=Mock()
+        responses=[]
+        for status in statuses:
+            response=Mock(status_code=status,headers={} if retry_after is None else {"Retry-After":retry_after})
+            response.json.return_value={"data":[]}
+            responses.append(response)
+        s.get.side_effect=responses
+        return s
+
+    def gecko_clock(self):
+        clock=[100.]
+        def sleep(seconds):
+            clock[0]+=seconds
+        return clock,sleep
+
+    def test_gecko_paces_successive_requests(self):
+        clock,sleep=self.gecko_clock()
+        s=self.gecko_fake([200,200,200])
+        with patch.object(p.time,"monotonic",side_effect=lambda:clock[0]),patch.object(p.time,"sleep",side_effect=sleep):
+            client=p.GeckoClient(s)
+            for _ in range(3):
+                client.get(p.GECKO+"/networks")
+        self.assertEqual(client.attempts,3)
+        self.assertEqual(client.wait_seconds,40)
+
+    def test_gecko_429_retry_same_request_and_cutoff(self):
+        clock,sleep=self.gecko_clock()
+        s=self.gecko_fake([429,200],"75")
+        params={"before_timestamp":12345,"limit":48}
+        with patch.object(p.time,"monotonic",side_effect=lambda:clock[0]),patch.object(p.time,"sleep",side_effect=sleep):
+            client=p.GeckoClient(s)
+            client.get(p.GECKO+"/networks",params)
+        self.assertEqual(s.get.call_args_list[0],s.get.call_args_list[1])
+        self.assertEqual(client.wait_seconds,75)
+        self.assertEqual(client.rate_limits,1)
+        self.assertEqual(client.retries,1)
+
+    def test_gecko_repeated_429_stops_remaining_calls(self):
+        clock,sleep=self.gecko_clock()
+        s=self.gecko_fake([429,429])
+        with patch.object(p.time,"monotonic",side_effect=lambda:clock[0]),patch.object(p.time,"sleep",side_effect=sleep):
+            client=p.GeckoClient(s)
+            with self.assertRaises(p.requests.HTTPError):
+                client.get(p.GECKO+"/networks")
+            with self.assertRaisesRegex(ValueError,"paused"):
+                client.get(p.GECKO+"/networks")
+        self.assertEqual(s.get.call_count,2)
+        self.assertTrue(client.stopped)
+
+    def test_gecko_long_retry_after_stops_without_retry(self):
+        s=self.gecko_fake([429],"120")
+        client=p.GeckoClient(s)
+        with self.assertRaises(p.requests.HTTPError):
+            client.get(p.GECKO+"/networks")
+        self.assertEqual(s.get.call_count,1)
+        self.assertTrue(client.stopped)
+
+    def test_gecko_total_retry_budget(self):
+        clock,sleep=self.gecko_clock()
+        s=self.gecko_fake([429,200,429,200,429])
+        with patch.object(p.time,"monotonic",side_effect=lambda:clock[0]),patch.object(p.time,"sleep",side_effect=sleep):
+            client=p.GeckoClient(s)
+            client.get(p.GECKO+"/networks")
+            client.get(p.GECKO+"/networks")
+            with self.assertRaises(p.requests.HTTPError):
+                client.get(p.GECKO+"/networks")
+        self.assertEqual(client.retries,2)
+        self.assertEqual(s.get.call_count,5)
+        self.assertTrue(client.stopped)
+
+    def test_gecko_non429_no_retry(self):
+        s=self.gecko_fake([403])
+        client=p.GeckoClient(s)
+        with self.assertRaises(p.requests.HTTPError):
+            client.get(p.GECKO+"/networks")
+        self.assertEqual(s.get.call_count,1)
+
     def test_http_refusal_no_redirect(self):
         s=Mock()
         s.get.return_value=Mock(status_code=429)
