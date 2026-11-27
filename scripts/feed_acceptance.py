@@ -2,7 +2,6 @@
 import io
 import json
 import logging
-import os
 import sys
 from datetime import datetime, timedelta
 from importlib.metadata import version
@@ -13,6 +12,7 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
+from scripts import alpaca_feed as alpaca
 
 SECTORS = "XLK XLF XLV XLE XLI XLY XLP XLU XLB XLRE XLC".split()
 SYMBOLS = ["SPY", *SECTORS, *"QQQ DIA IWM RSP KBE KRE SMH SOXX HYG LQD TLT IEF SHY GLD SLV".split()]
@@ -23,9 +23,9 @@ CAL = xcals.get_calendar("XNYS", start="2018-12-01", end=str(END+timedelta(days=
 EXPECTED = pd.DatetimeIndex(CAL.sessions_in_range(START, str(END-timedelta(days=1)))).tz_localize(None)
 REPORT = {"asof_utc": datetime.now(ZoneInfo("UTC")).isoformat(), "start": START,
           "last_expected_session": str(EXPECTED[-1].date()), "expected_sessions": len(EXPECTED),
-          "scope": "daily research, not intraday or production approval",
+          "scope": "daily research and historical 5-minute probe, not production approval",
           "versions": {p: version(p) for p in ("yfinance","pandas","numpy","requests","exchange-calendars")},
-          "yahoo": {}, "stooq": {}, "fred": {}, "comparison": {}}
+          "yahoo": {}, "alpaca_sip": {}, "fred": {}, "comparison": {}, "intraday_probe": {}}
 
 def norm(df):
     df = df.copy()
@@ -70,11 +70,11 @@ def failure(exc):
         result["http_status"] = exc.response.status_code
     return result
 
-def compare_sources(ticker, yahoo, stooq):
-    missing = [name for name, source in (("yahoo", yahoo), ("stooq", stooq)) if ticker not in source]
+def compare_sources(ticker, yahoo, secondary, provider="alpaca_sip"):
+    missing = [name for name, source in (("yahoo", yahoo), (provider, secondary)) if ticker not in source]
     if missing:
         return {"status":"BLOCKED","reason":"source data unavailable","missing_sources":missing}
-    aligned = pd.concat([yahoo[ticker], stooq[ticker]],axis=1).reindex(EXPECTED)
+    aligned = pd.concat([yahoo[ticker], secondary[ticker]],axis=1).reindex(EXPECTED)
     returns = np.log(aligned).diff().dropna()
     if len(returns) < 250:
         raise ValueError("insufficient overlap")
@@ -87,7 +87,7 @@ def compare_sources(ticker, yahoo, stooq):
 
 def main():
     logging.getLogger("yfinance").setLevel(logging.CRITICAL)
-    yahoo, stooq = {}, {}
+    yahoo, sip = {}, {}
     # Batch requests, no auto-adjust: explicitly use adjusted closes for research.
     for offset in range(0, len(SYMBOLS), 6):
         batch = SYMBOLS[offset:offset+6]
@@ -105,28 +105,52 @@ def main():
         except Exception as exc:
             for ticker in batch:
                 REPORT["yahoo"][ticker] = failure(exc)
-    # Independent secondary source; authenticated CSV access, no key logging.
-    stooq_key = os.environ.get("STOOQ_API_KEY", "").strip()
-    for ticker in ["SPY", *SECTORS]:
-        if not stooq_key:
-            REPORT["stooq"][ticker] = {"status":"BLOCKED","reason":"STOOQ_API_KEY not configured"}
-            continue
+    # SIP daily history is the independent provider; never substitute IEX silently.
+    core = ["SPY", *SECTORS]
+    headers = alpaca.credentials()
+    start = pd.Timestamp(START,tz="America/New_York").isoformat()
+    end = (pd.Timestamp(END,tz="America/New_York")-pd.Timedelta(seconds=1)).isoformat()
+    try:
+        if not headers:
+            raise ValueError("missing Alpaca credentials")
+        rows,pages=alpaca.fetch_bars(core,"sip","1Day",start,end,"all",headers)
+        REPORT["alpaca_daily_pages"]=pages
+        for ticker in core:
+            try:
+                REPORT["alpaca_sip"][ticker],sip[ticker]=quality(alpaca.daily_frame(rows[ticker]),"Close")
+            except Exception as exc:
+                REPORT["alpaca_sip"][ticker]=failure(exc)
+    except Exception as exc:
+        for ticker in core:
+            REPORT["alpaca_sip"][ticker]=failure(exc) if headers else {"status":"BLOCKED","reason":"Alpaca Secrets not configured"}
+    for ticker in core:
         try:
-            response = requests.get("https://stooq.com/q/d/l/", params={
-                "s": ticker.lower()+".us", "i":"d", "apikey":stooq_key, "d1":START.replace("-",""),
-                "d2":str(END-timedelta(days=1)).replace("-","")}, timeout=15)
-            response.raise_for_status()
-            if not response.text.lstrip("\ufeff").startswith("Date,"):
-                raise ValueError("unexpected CSV format")
-            df = pd.read_csv(io.StringIO(response.text), index_col="Date", parse_dates=True)
-            REPORT["stooq"][ticker], stooq[ticker] = quality(df,"Close")
+            REPORT["comparison"][ticker]=compare_sources(ticker,yahoo,sip)
         except Exception as exc:
-            REPORT["stooq"][ticker] = failure(exc)
-    for ticker in ["SPY", *SECTORS]:
+            REPORT["comparison"][ticker]=failure(exc)
+    # One prior completed regular session only, with holiday/early-close calendar.
+    session = CAL.date_to_session(EXPECTED[-1])
+    op,cl=CAL.session_open(session),CAL.session_close(session)
+    expected5=pd.date_range(op,cl,freq="5min",inclusive="left")
+    for feed in ("sip","iex"):
+        probe={"session":str(EXPECTED[-1].date()),"expected_bars_per_symbol":len(expected5),
+               "open_utc":op.isoformat(),"close_utc":cl.isoformat(),"symbols":{}}
         try:
-            REPORT["comparison"][ticker] = compare_sources(ticker, yahoo, stooq)
+            if not headers:
+                raise ValueError("missing Alpaca credentials")
+            rows,pages=alpaca.fetch_bars(core,feed,"5Min",op.isoformat(),
+                (cl-pd.Timedelta(seconds=1)).isoformat(),"raw",headers)
+            probe["pages"]=pages
+            for ticker in core:
+                try:
+                    probe["symbols"][ticker]=alpaca.intraday_quality(rows[ticker],expected5)
+                except Exception as exc:
+                    probe["symbols"][ticker]=failure(exc)
+            probe["status"]="PASS" if all(r["status"]=="PASS" for r in probe["symbols"].values()) else "FAIL"
         except Exception as exc:
-            REPORT["comparison"][ticker] = failure(exc)
+            probe.update(failure(exc) if headers else {"status":"BLOCKED","reason":"Alpaca Secrets not configured"})
+        REPORT["intraday_probe"][feed]=probe
+    REPORT["intraday_probe"]["scope"]="prior completed session only; no live latency or sustained availability proof"
     for series in ("VIXCLS","DGS10","DGS2","BAMLH0A0HYM2"):
         try:
             response=requests.get("https://fred.stlouisfed.org/graph/fredgraph.csv",
@@ -149,7 +173,7 @@ def main():
             REPORT["fred"][series]=failure(exc)
     core=["SPY",*SECTORS]
     primary=all(REPORT["yahoo"][s]["status"]=="PASS" for s in core)
-    secondary=all(REPORT["stooq"][s]["status"]=="PASS" for s in core)
+    secondary=all(REPORT["alpaca_sip"][s]["status"]=="PASS" for s in core)
     compare=all(REPORT["comparison"][s]["status"]=="PASS" for s in core)
     macro=all(x["status"]=="PASS" for x in REPORT["fred"].values())
     common = EXPECTED.copy()
@@ -161,7 +185,7 @@ def main():
     REPORT["gates"]={"core_primary":primary,"core_secondary":secondary,
                      "crosscheck":compare,"macro":macro,
                      "extended_primary":all(x["status"]=="PASS" for x in REPORT["yahoo"].values()),
-                     "intraday":"NOT_RUN","drive_write":"NOT_RUN","dashboard_integration":"NOT_RUN"}
+                     "intraday":"HISTORICAL_PROBE_ONLY","drive_write":"NOT_RUN","dashboard_integration":"NOT_RUN"}
     REPORT["primary_research_status"] = "READY_FOR_EXPLORATORY_RESEARCH_REVIEW" if primary and aligned>=.99 else "NO_GO"
     REPORT["independent_verification_status"] = "PASS" if secondary and compare else "NOT_VERIFIED"
     REPORT["verdict"]="GO_FOR_DAILY_RESEARCH_REVIEW" if primary and secondary and compare and macro and aligned>=.99 else "NO_GO"
